@@ -1,0 +1,9 @@
+{
+  "actorSpecification": 1,
+  "name": "spt-tcgplayer-scraper",
+  "title": "SPT TCGPlayer MTG Scraper",
+  "description": "Scrapes Magic: The Gathering card market data from TCGPlayer — listings, sales history, and analytics. Resolves card variants via Scryfall. Pushes to SPT backend or Apify Dataset.",
+  "version": "1.0",
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile"
+}

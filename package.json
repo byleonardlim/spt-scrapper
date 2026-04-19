@@ -1,0 +1,26 @@
+{
+  "name": "spt-tcgplayer-scraper",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Apify actor — scrapes MTG card market data from TCGPlayer",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "node dist/main.js",
+    "build": "tsc",
+    "dev": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "apify": "^3.2.2",
+    "crawlee": "^3.10.0",
+    "got-scraping": "^4.0.4",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "devDependencies": {
+    "@apify/tsconfig": "^0.1.0",
+    "@types/node": "^20.0.0",
+    "playwright-core": "^1.59.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  }
+}

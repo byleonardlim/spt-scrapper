@@ -1,0 +1,92 @@
+{
+  "title": "SPT TCGPlayer Scraper Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "sets": {
+      "title": "Set codes to scrape",
+      "type": "array",
+      "description": "Scryfall set codes to scrape. Each code fetches the first N cards by collector number.",
+      "default": ["eoe", "tmnt"],
+      "editor": "json"
+    },
+    "cardsPerSet": {
+      "title": "Cards per set",
+      "type": "integer",
+      "description": "Maximum number of cards to scrape per set, ordered by collector number.",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "salesWindowDays": {
+      "title": "Sales history window (days)",
+      "type": "integer",
+      "description": "Number of days of sales history to retrieve from TCGPlayer. Supports 30 or 90.",
+      "default": 30,
+      "enum": [30, 90]
+    },
+    "topListingsCount": {
+      "title": "Top listings count",
+      "type": "integer",
+      "description": "Number of cheapest listings to include in inventory_snapshot.top_listings.",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 50
+    },
+    "webhookUrl": {
+      "title": "Webhook URL",
+      "type": "string",
+      "description": "SPT backend ingest endpoint. If provided, results are POSTed here instead of Apify Dataset. E.g. https://your-spt-api.com/ingest/tcgplayer/batch",
+      "editor": "textfield"
+    },
+    "webhookAuthToken": {
+      "title": "Webhook auth token",
+      "type": "string",
+      "description": "Bearer token sent in the Authorization header of every webhook POST. Keep this secret.",
+      "editor": "textfield",
+      "isSecret": true
+    },
+    "webhookDeliveryMode": {
+      "title": "Webhook delivery mode",
+      "type": "string",
+      "description": "batch: POST all records once at the end. per-record: POST each card record immediately after scraping.",
+      "default": "batch",
+      "enum": ["batch", "per-record"]
+    },
+    "maxConcurrency": {
+      "title": "Max concurrency",
+      "type": "integer",
+      "description": "Maximum number of TCGPlayer pages scraped in parallel. Keep low (2-3) to avoid DataDome detection.",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
+    "delayBetweenRequestsMs": {
+      "title": "Delay between requests (ms)",
+      "type": "integer",
+      "description": "Base delay in milliseconds between TCGPlayer requests. Actual delay adds random jitter up to +2000ms.",
+      "default": 1500,
+      "minimum": 500
+    },
+    "maxRetries": {
+      "title": "Max retries",
+      "type": "integer",
+      "description": "Maximum number of retry attempts per URL on DataDome block or network error.",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 10
+    },
+    "proxyConfiguration": {
+      "title": "Proxy configuration",
+      "type": "object",
+      "description": "Apify proxy settings. Residential US proxies strongly recommended for DataDome bypass.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "apifyProxyCountry": "US"
+      }
+    }
+  },
+  "required": ["sets"]
+}
