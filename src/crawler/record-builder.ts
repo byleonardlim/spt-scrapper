@@ -11,6 +11,7 @@ const deriveSellerType = (listing: TcgListing): TopListing['seller_type'] => {
 
 const buildTopListings = (listings: TcgListing[], count: number): TopListing[] => {
     return listings
+        .slice(0, count)
         .map((l): TopListing => ({
             listing_id: String(l.listingId),
             seller_name: l.sellerName,
@@ -23,9 +24,7 @@ const buildTopListings = (listings: TcgListing[], count: number): TopListing[] =
             price_base: l.price,
             price_shipping: l.shippingPrice,
             price_landed: Number((l.price + l.shippingPrice).toFixed(2)),
-        }))
-        .sort((a, b) => a.price_landed - b.price_landed)
-        .slice(0, count);
+        }));
 };
 
 const buildSalesHistory = (buckets: TcgSalesBucket[]): SaleRecord[] => {
@@ -49,19 +48,20 @@ const computeAnalytics = (
         return { wall_depth_10pct: 0, sales_velocity_24h: 0, liquidity_gap_ratio: 0 };
     }
 
-    const lowestPrice = listings[0]?.price_landed ?? 0;
+    const sorted = [...listings].sort((a, b) => a.price_landed - b.price_landed);
+    const lowestPrice = sorted[0]?.price_landed ?? 0;
     const wallThreshold = lowestPrice * 1.1;
-    const wall_depth_10pct = listings.filter((l) => l.price_landed <= wallThreshold).length;
+    const wall_depth_10pct = sorted.filter((l) => l.price_landed <= wallThreshold).length;
 
     const totalSold = salesHistory.reduce((sum, s) => sum + s.quantity_sold, 0);
     const sales_velocity_24h = salesWindowDays > 0
         ? Number((totalSold / salesWindowDays).toFixed(2))
         : 0;
 
-    const secondListing = listings[1];
+    const secondLowest = sorted[1];
     const liquidity_gap_ratio =
-        lowestPrice > 0 && secondListing
-            ? Number(((secondListing.price_landed - lowestPrice) / lowestPrice).toFixed(4))
+        lowestPrice > 0 && secondLowest
+            ? Number(((secondLowest.price_landed - lowestPrice) / lowestPrice).toFixed(4))
             : 0;
 
     return { wall_depth_10pct, sales_velocity_24h, liquidity_gap_ratio };
