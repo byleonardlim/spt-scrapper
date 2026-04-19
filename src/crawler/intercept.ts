@@ -117,7 +117,7 @@ export const setupInterception = (
     page: Page,
     productId: number,
     salesWindowDays: number,
-): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; getListingsApiUrl: () => string | null; getListingsApiHeaders: () => Record<string, string>; collected: TcgInterceptedData; cleanup: () => Promise<void> } => {
+): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; getListingsApiUrl: () => string | null; getListingsApiHeaders: () => Record<string, string>; getListingsApiMethod: () => string; getListingsApiPostData: () => string | null; collected: TcgInterceptedData; cleanup: () => Promise<void> } => {
     const collected: TcgInterceptedData = {
         listings: [],
         salesBuckets: [],
@@ -127,6 +127,8 @@ export const setupInterception = (
     let listingsSnippetLogged = false;
     let listingsApiUrl: string | null = null;
     let listingsApiHeaders: Record<string, string> = {};
+    let listingsApiMethod: string = 'GET';
+    let listingsApiPostData: string | null = null;
 
     const handler = async (response: Response) => {
         const url = response.url();
@@ -142,7 +144,10 @@ export const setupInterception = (
                 if (!listingsApiUrl) {
                     listingsApiUrl = url;
                     try {
-                        listingsApiHeaders = await response.request().allHeaders();
+                        const req = response.request();
+                        listingsApiHeaders = await req.allHeaders();
+                        listingsApiMethod = req.method();
+                        listingsApiPostData = req.postData() ?? null;
                     } catch { /* ignore */ }
                 }
                 const body = await safeJson(response);
@@ -225,6 +230,8 @@ export const setupInterception = (
         getObservedUrls: () => [...observedApiUrls],
         getListingsApiUrl: () => listingsApiUrl,
         getListingsApiHeaders: () => ({ ...listingsApiHeaders }),
+        getListingsApiMethod: () => listingsApiMethod,
+        getListingsApiPostData: () => listingsApiPostData,
         collected,
         cleanup: async () => {
             page.off('response', handler);

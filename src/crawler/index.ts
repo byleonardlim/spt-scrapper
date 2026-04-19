@@ -133,7 +133,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, collected, getListingsApiUrl, getListingsApiHeaders, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, collected, getListingsApiUrl, getListingsApiHeaders, getListingsApiMethod, getListingsApiPostData, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 // Phase A: Navigate with domcontentloaded (don't wait for networkidle)
@@ -181,9 +181,8 @@ export const runCrawler = async (
                 const MAX_PAGES = 5;
 
                 if (collected.listings.length < targetListings && listingsApiUrl) {
-                    log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, paginating API...`);
-
-                    const baseUrl = new URL(listingsApiUrl);
+                    const method = getListingsApiMethod();
+                    const originalPostData = getListingsApiPostData();
                     const apiHeaders = getListingsApiHeaders();
                     // Remove HTTP/2 pseudo-headers and headers that shouldn't be forwarded
                     for (const key of Object.keys(apiHeaders)) {
@@ -192,20 +191,37 @@ export const runCrawler = async (
                         }
                     }
 
+                    log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, paginating API (${method})...`);
+
                     for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
-                        const beforeCount = collected.listings.length;
-                        if (beforeCount >= targetListings) break;
+                        if (collected.listings.length >= targetListings) break;
 
                         const offset = pageNum * PAGE_SIZE;
-                        baseUrl.searchParams.set('offset', String(offset));
-                        baseUrl.searchParams.set('limit', String(PAGE_SIZE));
-                        const fetchUrl = baseUrl.toString();
 
-                        // Replay via Playwright's APIRequestContext (bypasses CORS)
                         try {
-                            const apiResponse = await page.context().request.get(fetchUrl, {
-                                headers: apiHeaders,
-                            });
+                            let apiResponse;
+
+                            if (method === 'POST' && originalPostData) {
+                                // Modify the POST body to set offset/limit for pagination
+                                let postBody: Record<string, unknown> = {};
+                                try { postBody = JSON.parse(originalPostData); } catch { /* use empty */ }
+                                postBody.offset = offset;
+                                postBody.limit = PAGE_SIZE;
+
+                                apiResponse = await page.context().request.post(listingsApiUrl, {
+                                    headers: apiHeaders,
+                                    data: postBody,
+                                });
+                            } else {
+                                // GET with query params
+                                const fetchUrl = new URL(listingsApiUrl);
+                                fetchUrl.searchParams.set('offset', String(offset));
+                                fetchUrl.searchParams.set('limit', String(PAGE_SIZE));
+
+                                apiResponse = await page.context().request.get(fetchUrl.toString(), {
+                                    headers: apiHeaders,
+                                });
+                            }
 
                             if (!apiResponse.ok()) {
                                 log.info(`Product ${productId}: page ${pageNum + 1} returned ${apiResponse.status()}, stopping`);
@@ -228,7 +244,6 @@ export const runCrawler = async (
                             break;
                         }
 
-                        // Small jitter between pagination requests
                         await sleep(randomJitter(300));
                     }
                 }
