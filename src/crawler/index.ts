@@ -4,7 +4,7 @@ import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { ActorInput, ScrapedRecord, ScryfallSeedCard } from '../types.js';
 import type { TcgInterceptedData } from './tcgplayer-types.js';
-import { setupInterception } from './intercept.js';
+import { setupInterception, parseListingsResponse } from './intercept.js';
 import { extractFromSsrState, extractFromDom, mergeInterceptedData } from './extract.js';
 import { buildRecord } from './record-builder.js';
 
@@ -133,7 +133,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, collected, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, collected, getListingsApiUrl, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 // Phase A: Navigate with domcontentloaded (don't wait for networkidle)
@@ -174,36 +174,63 @@ export const runCrawler = async (
                 // Phase E: Small jitter before extraction
                 await sleep(randomJitter(500));
 
-                // Phase F: Scroll to load more listings if needed
+                // Phase F: Paginate listings API if we need more
                 const targetListings = input.topListingsCount;
-                const MAX_SCROLL_ATTEMPTS = 5;
-                if (collected.listings.length < targetListings) {
-                    log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, scrolling for more...`);
-                    for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS; attempt++) {
+                const listingsApiUrl = getListingsApiUrl();
+                const PAGE_SIZE = 10;
+                const MAX_PAGES = 5;
+
+                if (collected.listings.length < targetListings && listingsApiUrl) {
+                    log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, paginating API...`);
+
+                    // Parse the base URL and preserve existing query params
+                    const baseUrl = new URL(listingsApiUrl);
+
+                    for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
                         const beforeCount = collected.listings.length;
+                        if (beforeCount >= targetListings) break;
 
-                        // Scroll the listing table/container into view and then scroll down
-                        await page.evaluate(() => {
-                            const container = document.querySelector('table.near-mint-table')
-                                ?? document.querySelector('section.product-details__listings-total')
-                                ?? document.querySelector('.marketplace');
-                            if (container) {
-                                container.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                        const offset = pageNum * PAGE_SIZE;
+                        baseUrl.searchParams.set('offset', String(offset));
+                        baseUrl.searchParams.set('limit', String(PAGE_SIZE));
+                        const fetchUrl = baseUrl.toString();
+
+                        // Replay the API call from within the page context (uses session cookies)
+                        const jsonText = await page.evaluate(async (url: string) => {
+                            try {
+                                const res = await fetch(url, { credentials: 'include' });
+                                if (!res.ok) return null;
+                                return await res.text();
+                            } catch {
+                                return null;
                             }
-                            window.scrollBy(0, 800);
-                        }).catch(() => {});
+                        }, fetchUrl).catch(() => null);
 
-                        // Wait for new API responses to arrive and be processed
-                        await sleep(2500);
-
-                        if (collected.listings.length >= targetListings) {
-                            log.info(`Product ${productId}: reached ${collected.listings.length} listings after ${attempt + 1} scroll(s)`);
+                        if (!jsonText) {
+                            log.info(`Product ${productId}: pagination fetch failed at page ${pageNum + 1}, stopping`);
                             break;
                         }
-                        if (collected.listings.length === beforeCount) {
-                            log.info(`Product ${productId}: no new listings after scroll ${attempt + 1}, stopping`);
+
+                        // Parse and accumulate
+                        try {
+                            const body = JSON.parse(jsonText);
+                            const listings = parseListingsResponse(body);
+                            if (listings.length > 0) {
+                                const existingIds = new Set(collected.listings.map((l) => l.listingId));
+                                const newItems = listings.filter((l) => !existingIds.has(l.listingId));
+                                collected.listings.push(...newItems);
+                                log.info(`Product ${productId}: page ${pageNum + 1} → +${newItems.length} listings (total: ${collected.listings.length})`);
+                            } else {
+                                log.info(`Product ${productId}: page ${pageNum + 1} returned 0 listings, stopping`);
+                                break;
+                            }
+                        } catch {
+                            log.info(`Product ${productId}: pagination parse failed at page ${pageNum + 1}, stopping`);
                             break;
                         }
+
+                        // Small jitter between pagination requests
+                        await sleep(randomJitter(300));
                     }
                 }
 
