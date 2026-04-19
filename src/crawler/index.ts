@@ -133,7 +133,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, collected, getListingsApiUrl, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, collected, getListingsApiUrl, getListingsApiHeaders, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 // Phase A: Navigate with domcontentloaded (don't wait for networkidle)
@@ -183,8 +183,11 @@ export const runCrawler = async (
                 if (collected.listings.length < targetListings && listingsApiUrl) {
                     log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, paginating API...`);
 
-                    // Parse the base URL and preserve existing query params
                     const baseUrl = new URL(listingsApiUrl);
+                    const apiHeaders = getListingsApiHeaders();
+                    // Remove headers that shouldn't be forwarded
+                    delete apiHeaders['host'];
+                    delete apiHeaders['content-length'];
 
                     for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
                         const beforeCount = collected.listings.length;
@@ -195,25 +198,18 @@ export const runCrawler = async (
                         baseUrl.searchParams.set('limit', String(PAGE_SIZE));
                         const fetchUrl = baseUrl.toString();
 
-                        // Replay the API call from within the page context (uses session cookies)
-                        const jsonText = await page.evaluate(async (url: string) => {
-                            try {
-                                const res = await fetch(url, { credentials: 'include' });
-                                if (!res.ok) return null;
-                                return await res.text();
-                            } catch {
-                                return null;
-                            }
-                        }, fetchUrl).catch(() => null);
-
-                        if (!jsonText) {
-                            log.info(`Product ${productId}: pagination fetch failed at page ${pageNum + 1}, stopping`);
-                            break;
-                        }
-
-                        // Parse and accumulate
+                        // Replay via Playwright's APIRequestContext (bypasses CORS)
                         try {
-                            const body = JSON.parse(jsonText);
+                            const apiResponse = await page.context().request.get(fetchUrl, {
+                                headers: apiHeaders,
+                            });
+
+                            if (!apiResponse.ok()) {
+                                log.info(`Product ${productId}: page ${pageNum + 1} returned ${apiResponse.status()}, stopping`);
+                                break;
+                            }
+
+                            const body = await apiResponse.json();
                             const listings = parseListingsResponse(body);
                             if (listings.length > 0) {
                                 const existingIds = new Set(collected.listings.map((l) => l.listingId));
@@ -224,8 +220,8 @@ export const runCrawler = async (
                                 log.info(`Product ${productId}: page ${pageNum + 1} returned 0 listings, stopping`);
                                 break;
                             }
-                        } catch {
-                            log.info(`Product ${productId}: pagination parse failed at page ${pageNum + 1}, stopping`);
+                        } catch (err) {
+                            log.info(`Product ${productId}: pagination failed at page ${pageNum + 1}`, { error: String(err) });
                             break;
                         }
 

@@ -117,7 +117,7 @@ export const setupInterception = (
     page: Page,
     productId: number,
     salesWindowDays: number,
-): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; getListingsApiUrl: () => string | null; collected: TcgInterceptedData; cleanup: () => Promise<void> } => {
+): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; getListingsApiUrl: () => string | null; getListingsApiHeaders: () => Record<string, string>; collected: TcgInterceptedData; cleanup: () => Promise<void> } => {
     const collected: TcgInterceptedData = {
         listings: [],
         salesBuckets: [],
@@ -126,6 +126,7 @@ export const setupInterception = (
     const observedApiUrls: string[] = [];
     let listingsSnippetLogged = false;
     let listingsApiUrl: string | null = null;
+    let listingsApiHeaders: Record<string, string> = {};
 
     const handler = async (response: Response) => {
         const url = response.url();
@@ -138,7 +139,12 @@ export const setupInterception = (
             }
 
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
-                if (!listingsApiUrl) listingsApiUrl = url;
+                if (!listingsApiUrl) {
+                    listingsApiUrl = url;
+                    try {
+                        listingsApiHeaders = await response.request().allHeaders();
+                    } catch { /* ignore */ }
+                }
                 const body = await safeJson(response);
                 const listings = parseListingsResponse(body);
 
@@ -218,6 +224,7 @@ export const setupInterception = (
         }),
         getObservedUrls: () => [...observedApiUrls],
         getListingsApiUrl: () => listingsApiUrl,
+        getListingsApiHeaders: () => ({ ...listingsApiHeaders }),
         collected,
         cleanup: async () => {
             page.off('response', handler);
