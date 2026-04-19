@@ -9,7 +9,6 @@ RUN npm --quiet set progress=false \
     && npm --version
 
 COPY . ./
-RUN npm run build \
-    && npm prune --production
+RUN npm run build
 
 CMD npm start

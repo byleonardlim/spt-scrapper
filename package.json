@@ -14,13 +14,13 @@
     "crawlee": "^3.10.0",
     "got-scraping": "^4.0.4",
     "playwright-extra": "^4.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "@types/node": "^20.0.0",
+    "playwright-core": "^1.59.1",
+    "typescript": "^5.4.0"
   },
   "devDependencies": {
     "@apify/tsconfig": "^0.1.0",
-    "@types/node": "^20.0.0",
-    "playwright-core": "^1.59.1",
-    "tsx": "^4.7.0",
-    "typescript": "^5.4.0"
+    "tsx": "^4.7.0"
   }
 }
