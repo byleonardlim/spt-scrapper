@@ -19,49 +19,82 @@ const safeJson = async (response: Response): Promise<unknown> => {
 const parseListingsResponse = (body: unknown): TcgListing[] => {
     if (!body || typeof body !== 'object') return [];
     const b = body as Record<string, unknown>;
-    const results = (b.results ?? b.listings ?? b.data ?? []) as Record<string, unknown>[];
-    if (!Array.isArray(results)) return [];
 
-    return results.map((r): TcgListing => ({
-        listingId: String(r.listingId ?? r.listing_id ?? ''),
-        price: Number(r.price ?? 0),
-        shippingPrice: Number(r.shippingPrice ?? r.shipping_price ?? 0),
-        condition: String(r.condition ?? 'Unknown'),
-        printing: String(r.printing ?? r.printing_name ?? 'Normal'),
-        quantity: parseInt(String(r.quantity ?? 1), 10),
-        sellerName: String(r.sellerName ?? r.seller_name ?? ''),
-        goldSeller: Boolean(r.goldSeller ?? r.gold_seller ?? false),
-        directSeller: Boolean(r.directSeller ?? r.direct_seller ?? false),
-        verifiedSeller: Boolean(r.verifiedSeller ?? r.verified_seller ?? false),
-        sellerRating: Number(r.sellerRating ?? r.seller_rating ?? 0),
-        sellerSales: String(r.sellerSales ?? r.seller_sales ?? '0'),
-    })).filter((l) => l.price > 0);
+    // TCGPlayer listings API returns: {errors:[], results:[{totalResults, aggregations, results:[...listings...]}]}
+    // The actual listing items are nested inside results[0].results or results[0].listings
+    let items: Record<string, unknown>[] = [];
+
+    const topResults = b.results;
+    if (Array.isArray(topResults) && topResults.length > 0) {
+        const first = topResults[0] as Record<string, unknown>;
+        // Nested results array inside the first result object
+        const nested = first.results ?? first.listings ?? first.data;
+        if (Array.isArray(nested) && nested.length > 0) {
+            items = nested as Record<string, unknown>[];
+        }
+    }
+
+    // Fallback: maybe body itself has listings/data at top level
+    if (items.length === 0) {
+        const fallback = b.listings ?? b.data;
+        if (Array.isArray(fallback)) items = fallback as Record<string, unknown>[];
+    }
+
+    if (items.length === 0) return [];
+
+    return items.map((r): TcgListing | null => {
+        // TCGPlayer listing fields: sellerKey, condition, printing, price/directPrice,
+        // quantity, sellerName, goldStar, directSeller, verifiedSeller, sellerShippingPrice, etc.
+        const price = Number(r.price ?? r.directLowPrice ?? r.listingPrice ?? 0);
+        if (price <= 0) return null;
+        return {
+            listingId: String(r.listingId ?? r.listing_id ?? r.sellerListingId ?? ''),
+            price,
+            shippingPrice: Number(r.shippingPrice ?? r.sellerShippingPrice ?? r.shipping_price ?? 0),
+            condition: String(r.condition ?? 'Unknown'),
+            printing: String(r.printing ?? r.variant ?? r.printing_name ?? 'Normal'),
+            quantity: parseInt(String(r.quantity ?? 1), 10),
+            sellerName: String(r.sellerName ?? r.seller_name ?? r.sellerKey ?? ''),
+            goldSeller: Boolean(r.goldSeller ?? r.goldStar ?? r.gold_seller ?? false),
+            directSeller: Boolean(r.directSeller ?? r.direct_seller ?? r.isDirect ?? false),
+            verifiedSeller: Boolean(r.verifiedSeller ?? r.verified_seller ?? r.isVerified ?? false),
+            sellerRating: Number(r.sellerRating ?? r.seller_rating ?? r.sellerFeedbackRating ?? 0),
+            sellerSales: String(r.sellerSales ?? r.seller_sales ?? r.sellerFeedbackCount ?? '0'),
+        };
+    }).filter((l): l is TcgListing => l !== null);
 };
 
 const parseSalesResponse = (body: unknown): TcgSalesBucket[] => {
     if (!body || typeof body !== 'object') return [];
     const b = body as Record<string, unknown>;
 
-    const rawBuckets =
-        (b.results as Record<string, unknown>[])?.[0]?.['buckets'] ??
-        b.buckets ??
+    // TCGPlayer latestsales API returns: {data:[{condition, variant, purchasePrice, shippingPrice, orderDate, quantity, ...}]}
+    // These are individual sale transactions, not pre-aggregated buckets.
+    const rawItems =
         b.data ??
+        (Array.isArray(b.results) ? (b.results[0] as Record<string, unknown>)?.data : undefined) ??
+        b.buckets ??
         b.results ??
         [];
 
-    if (!Array.isArray(rawBuckets)) return [];
+    if (!Array.isArray(rawItems)) return [];
 
-    return rawBuckets
+    return rawItems
         .map((r: Record<string, unknown>): TcgSalesBucket | null => {
-            const marketPrice = Number(r.marketPrice ?? r.market_price);
-            const bucketStartDate = String(r.bucketStartDate ?? r.bucket_start_date ?? r.date ?? '');
+            // Map individual sale transaction fields to our bucket format
+            const marketPrice = Number(
+                r.purchasePrice ?? r.marketPrice ?? r.market_price ?? r.price,
+            );
+            const bucketStartDate = String(
+                r.orderDate ?? r.bucketStartDate ?? r.bucket_start_date ?? r.date ?? '',
+            );
             if (!bucketStartDate || isNaN(marketPrice)) return null;
             return {
                 bucketStartDate,
-                quantitySold: parseInt(String(r.quantitySold ?? r.quantity_sold ?? 0), 10),
+                quantitySold: parseInt(String(r.quantity ?? r.quantitySold ?? r.quantity_sold ?? 1), 10),
                 marketPrice,
                 condition: r.condition ? String(r.condition) : undefined,
-                printing: r.printing ? String(r.printing) : undefined,
+                printing: r.printing ?? r.variant ? String(r.printing ?? r.variant) : undefined,
             };
         })
         .filter((b): b is TcgSalesBucket => b !== null);
@@ -112,7 +145,7 @@ export const setupInterception = (
                     collected.listings = listings;
                 } else if (body) {
                     // Log a snippet of raw body to debug parsing
-                    const snippet = JSON.stringify(body).slice(0, 500);
+                    const snippet = JSON.stringify(body).slice(0, 2000);
                     log.info(`Listings body snippet for ${productId}`, { snippet });
                 }
             } else if (SALES_PATTERN.test(url) && url.includes(String(productId))) {
