@@ -133,7 +133,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, getObservedUrls, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 // Phase A: Navigate with domcontentloaded (don't wait for networkidle)
@@ -173,76 +173,6 @@ export const runCrawler = async (
 
                 // Phase E: Small jitter before extraction
                 await sleep(randomJitter(500));
-
-                // --- Diagnostic: final URL & observed API calls ---
-                const finalUrl = page.url();
-                const observedUrls = getObservedUrls();
-                log.info(`Product ${productId} diagnostics`, {
-                    finalUrl,
-                    apiCallsObserved: observedUrls.length,
-                });
-                // Log ALL API URLs to find listing/sales endpoints
-                for (let i = 0; i < observedUrls.length; i += 5) {
-                    log.info(`Product ${productId} apiUrls [${i}-${i + 4}]`, {
-                        urls: observedUrls.slice(i, i + 5),
-                    });
-                }
-
-                // --- Diagnostic: __NEXT_DATA__ shape ---
-                const ssrDiag = await page.evaluate(() => {
-                    const el = document.getElementById('__NEXT_DATA__');
-                    if (!el?.textContent) return { exists: false, keys: [], snippet: '' };
-                    try {
-                        const parsed = JSON.parse(el.textContent);
-                        const ppKeys = Object.keys(parsed?.props?.pageProps ?? {});
-                        return {
-                            exists: true,
-                            keys: ppKeys.slice(0, 20),
-                            snippet: el.textContent.slice(0, 500),
-                        };
-                    } catch {
-                        return { exists: true, keys: [], snippet: el.textContent.slice(0, 300) };
-                    }
-                }).catch(() => ({ exists: false, keys: [], snippet: '' }));
-                log.info(`Product ${productId} __NEXT_DATA__`, ssrDiag);
-
-                // --- Diagnostic: page title + visible text snippet ---
-                const pageTitle = await page.title().catch(() => '');
-                const bodySnippet = await page.evaluate(() => {
-                    return document.body?.innerText?.slice(0, 500) ?? '';
-                }).catch(() => '');
-                log.info(`Product ${productId} page content`, { pageTitle, bodySnippet: bodySnippet.slice(0, 300) });
-
-                // --- Diagnostic: DOM structure around listings ---
-                const domDiag = await page.evaluate(() => {
-                    const probe = (selectors: string[]): string[] => {
-                        const found: string[] = [];
-                        for (const sel of selectors) {
-                            const els = document.querySelectorAll(sel);
-                            if (els.length > 0) {
-                                const first = els[0] as HTMLElement;
-                                found.push(`${sel} → ${els.length} hits, first: <${first.tagName.toLowerCase()} class="${first.className?.toString().slice(0, 80)}">`);
-                            }
-                        }
-                        return found;
-                    };
-                    const listingProbes = probe([
-                        '[class*="listing"]', '[class*="Listing"]',
-                        '[class*="seller"]', '[class*="Seller"]',
-                        '[class*="price"]', '[class*="Price"]',
-                        '[class*="product"]', '[class*="Product"]',
-                        '[class*="market"]', '[class*="Market"]',
-                        '[class*="search-result"]', '[class*="SearchResult"]',
-                        '[data-testid]',
-                        'table', 'tbody', 'tr',
-                    ]);
-                    // Get outer HTML of first few potential listing containers
-                    const listingContainer = document.querySelector('[class*="listing" i], [class*="search-result" i], [class*="product-listing" i]');
-                    const containerSnippet = listingContainer?.outerHTML?.slice(0, 500) ?? 'none found';
-                    return { probes: listingProbes.slice(0, 20), containerSnippet };
-                }).catch(() => ({ probes: [], containerSnippet: 'error' }));
-                log.info(`Product ${productId} DOM probes`, { probes: domDiag.probes });
-                log.info(`Product ${productId} listing container`, { html: domDiag.containerSnippet });
 
                 const intercepted = getInterceptedData();
                 const ssr = await extractFromSsrState(page);

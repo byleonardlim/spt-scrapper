@@ -124,6 +124,7 @@ export const setupInterception = (
         productDetails: null,
     };
     const observedApiUrls: string[] = [];
+    let listingsSnippetLogged = false;
 
     const handler = async (response: Response) => {
         const url = response.url();
@@ -137,36 +138,37 @@ export const setupInterception = (
 
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
-                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
-                log.info(`Intercepted listings API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const listings = parseListingsResponse(body);
-                log.info(`Parsed ${listings.length} listings for product ${productId}`);
                 if (listings.length > 0) {
-                    collected.listings = listings;
-                } else if (body) {
-                    // Log a snippet of raw body to debug parsing
-                    const snippet = JSON.stringify(body).slice(0, 2000);
-                    log.info(`Listings body snippet for ${productId}`, { snippet });
+                    // Accumulate listings across multiple API responses, dedup by listingId
+                    const existingIds = new Set(collected.listings.map((l) => l.listingId));
+                    const newItems = listings.filter((l) => !existingIds.has(l.listingId));
+                    collected.listings.push(...newItems);
+                    log.info(`Product ${productId}: +${newItems.length} listings (total: ${collected.listings.length})`);
+                } else if (body && !listingsSnippetLogged) {
+                    // Log results[0] keys once to discover the field containing listing items
+                    const b = body as Record<string, unknown>;
+                    const r0 = Array.isArray(b.results) && b.results[0] ? b.results[0] as Record<string, unknown> : null;
+                    const r0Keys = r0 ? Object.keys(r0) : [];
+                    log.debug(`Listings API (no items) for ${productId}`, { r0Keys });
+                    listingsSnippetLogged = true;
                 }
             } else if (SALES_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
-                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
-                log.info(`Intercepted sales API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const buckets = parseSalesResponse(body);
-                log.info(`Parsed ${buckets.length} sales buckets for product ${productId}`);
                 if (buckets.length > 0) {
-                    collected.salesBuckets = filterBucketsByWindow(buckets, salesWindowDays);
-                } else if (body) {
-                    const snippet = JSON.stringify(body).slice(0, 500);
-                    log.info(`Sales body snippet for ${productId}`, { snippet });
+                    // Accumulate sales across multiple responses, dedup by orderDate+price
+                    const existingKeys = new Set(collected.salesBuckets.map((b) => `${b.bucketStartDate}|${b.marketPrice}`));
+                    const newBuckets = filterBucketsByWindow(buckets, salesWindowDays)
+                        .filter((b) => !existingKeys.has(`${b.bucketStartDate}|${b.marketPrice}`));
+                    collected.salesBuckets.push(...newBuckets);
+                    log.info(`Product ${productId}: +${newBuckets.length} sales (total: ${collected.salesBuckets.length})`);
                 }
             } else if (PRODUCT_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
-                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
-                log.info(`Intercepted product details API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const details = parseProductResponse(body);
                 if (details) {
-                    log.info(`Parsed product details for ${productId}`, { details });
+                    log.info(`Product ${productId} details`, { market: details.marketPrice, median: details.medianPrice });
                     collected.productDetails = details;
                 }
             } else if (PRICE_HISTORY_PATTERN.test(url) && url.includes(String(productId))) {
