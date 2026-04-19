@@ -141,15 +141,6 @@ export const setupInterception = (
             }
 
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
-                if (!listingsApiUrl) {
-                    listingsApiUrl = url;
-                    try {
-                        const req = response.request();
-                        listingsApiHeaders = await req.allHeaders();
-                        listingsApiMethod = req.method();
-                        listingsApiPostData = req.postData() ?? null;
-                    } catch { /* ignore */ }
-                }
                 const body = await safeJson(response);
                 const listings = parseListingsResponse(body);
 
@@ -166,6 +157,22 @@ export const setupInterception = (
                 }
 
                 if (listings.length > 0) {
+                    // Capture request details from the call that actually returns listings
+                    // (not from aggregation-only calls which have a different POST body)
+                    if (!listingsApiUrl) {
+                        listingsApiUrl = url;
+                        try {
+                            const req = response.request();
+                            listingsApiHeaders = await req.allHeaders();
+                            listingsApiMethod = req.method();
+                            listingsApiPostData = req.postData() ?? null;
+                            log.info(`Product ${productId}: captured listings API`, {
+                                method: listingsApiMethod,
+                                hasPostData: Boolean(listingsApiPostData),
+                                postDataKeys: listingsApiPostData ? Object.keys(JSON.parse(listingsApiPostData)).slice(0, 15) : [],
+                            });
+                        } catch { /* ignore */ }
+                    }
                     // Accumulate listings across multiple API responses, dedup by listingId
                     const existingIds = new Set(collected.listings.map((l) => l.listingId));
                     const newItems = listings.filter((l) => !existingIds.has(l.listingId));
