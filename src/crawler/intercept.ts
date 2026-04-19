@@ -2,9 +2,10 @@ import { log } from 'apify';
 import type { Page, Response } from 'playwright-core';
 import type { TcgInterceptedData, TcgListing, TcgSalesBucket, TcgProductDetails } from './tcgplayer-types.js';
 
-const LISTINGS_PATTERN = /mpapi\.tcgplayer\.com.*\/listing/i;
-const SALES_PATTERN = /mpapi\.tcgplayer\.com.*sales/i;
-const PRODUCT_PATTERN = /mpapi\.tcgplayer\.com.*product.*details|api\.tcgplayer\.com.*pricing\/product/i;
+const LISTINGS_PATTERN = /mp-search-api\.tcgplayer\.com\/v1\/product\/\d+\/listings/i;
+const SALES_PATTERN = /mpapi\.tcgplayer\.com\/v2\/product\/\d+\/latestsales/i;
+const PRODUCT_PATTERN = /mp-search-api\.tcgplayer\.com\/v2\/product\/\d+\/details/i;
+const PRICE_HISTORY_PATTERN = /infinite-api\.tcgplayer\.com\/price\/history\/\d+/i;
 
 const safeJson = async (response: Response): Promise<unknown> => {
     try {
@@ -97,30 +98,59 @@ export const setupInterception = (
         if (status < 200 || status >= 300) return;
 
         try {
-            if (/mpapi\.tcgplayer\.com|api\.tcgplayer\.com/i.test(url)) {
+            if (/tcgplayer\.com/i.test(url) && !/\.(png|jpg|jpeg|gif|svg|woff|css)/.test(url)) {
                 observedApiUrls.push(`[${status}] ${url.slice(0, 200)}`);
             }
 
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
+                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
+                log.info(`Intercepted listings API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const listings = parseListingsResponse(body);
+                log.info(`Parsed ${listings.length} listings for product ${productId}`);
                 if (listings.length > 0) {
-                    log.debug(`Intercepted listings for product ${productId}`, { count: listings.length, url });
                     collected.listings = listings;
+                } else if (body) {
+                    // Log a snippet of raw body to debug parsing
+                    const snippet = JSON.stringify(body).slice(0, 500);
+                    log.info(`Listings body snippet for ${productId}`, { snippet });
                 }
             } else if (SALES_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
+                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
+                log.info(`Intercepted sales API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const buckets = parseSalesResponse(body);
+                log.info(`Parsed ${buckets.length} sales buckets for product ${productId}`);
                 if (buckets.length > 0) {
-                    log.debug(`Intercepted sales for product ${productId}`, { count: buckets.length, url });
                     collected.salesBuckets = filterBucketsByWindow(buckets, salesWindowDays);
+                } else if (body) {
+                    const snippet = JSON.stringify(body).slice(0, 500);
+                    log.info(`Sales body snippet for ${productId}`, { snippet });
                 }
             } else if (PRODUCT_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
+                const bodyKeys = body && typeof body === 'object' ? Object.keys(body as Record<string, unknown>).slice(0, 10) : [];
+                log.info(`Intercepted product details API for product ${productId}`, { url: url.slice(0, 150), bodyKeys });
                 const details = parseProductResponse(body);
                 if (details) {
-                    log.debug(`Intercepted product details for ${productId}`, { details, url });
+                    log.info(`Parsed product details for ${productId}`, { details });
                     collected.productDetails = details;
+                }
+            } else if (PRICE_HISTORY_PATTERN.test(url) && url.includes(String(productId))) {
+                const body = await safeJson(response);
+                log.debug(`Intercepted price history for ${productId}`, { url, bodyKeys: body ? Object.keys(body as Record<string, unknown>) : [] });
+                // Extract market/median price from price history if product details not yet captured
+                if (!collected.productDetails && body && typeof body === 'object') {
+                    const b = body as Record<string, unknown>;
+                    const mp = Number(b.marketPrice ?? (b as any).result?.marketPrice);
+                    const med = Number(b.medianPrice ?? (b as any).result?.medianPrice);
+                    if (!isNaN(mp)) {
+                        collected.productDetails = {
+                            marketPrice: mp,
+                            medianPrice: isNaN(med) ? null : med,
+                            totalListings: 0,
+                        };
+                    }
                 }
             }
         } catch (err) {

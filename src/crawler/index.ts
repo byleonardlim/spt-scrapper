@@ -14,14 +14,12 @@ const JITTER_EXTRA_MS = 2000;
 const DATADOME_PATTERNS = ['datadome', 'blocked', 'captcha', 'interstitial'];
 const HYDRATION_TIMEOUT_MS = 15_000;
 const PRODUCT_SELECTORS = [
-    '[class*="product-details"]',
-    '[class*="ProductDetails"]',
-    '[class*="listing"]',
-    '[data-testid="product-detail"]',
-    '.price-point',
-    '.market-price',
-    'h1[class*="name" i]',
-    'section[class*="product" i]',
+    'section.product-details__listings-total',
+    'div.marketPrice',
+    'table.near-mint-table',
+    'section.spotlight__seller',
+    '.top-listing-price',
+    '.marketplace',
 ];
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
