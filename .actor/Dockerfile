@@ -2,15 +2,14 @@ FROM apify/actor-node-playwright-chrome:20
 
 COPY package*.json ./
 RUN npm --quiet set progress=false \
-    && npm install --only=prod --no-optional \
-    && echo "Installed NPM packages:" \
-    && (npm list --only=prod --no-optional --all || true) \
+    && npm install --no-optional \
     && echo "Node.js version:" \
     && node --version \
     && echo "NPM version:" \
     && npm --version
 
 COPY . ./
-RUN npm run build
+RUN npm run build \
+    && npm prune --production
 
 CMD npm start
