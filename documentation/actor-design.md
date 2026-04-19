@@ -92,14 +92,62 @@ TCGPlayer uses **DataDome** for bot protection (not Cloudflare).
 | Session Pool | Crawlee `SessionPool` — auto-retires sessions on DataDome challenge detection |
 | Delay | 1.5–3.5s random jitter between requests |
 | Fingerprint | Realistic Chrome UA, `Accept-Language: en-US,en`, viewport 1366×768 |
-| Challenge detection | HTTP 403 with `datadome` cookie → retire session, re-queue URL (max 3 retries) |
+| Challenge detection | Hard block (HTTP 403 + `datadome` cookie) and soft block (empty shell page) → retire session, re-queue URL (max 3 retries) |
+| Concurrency | Capped at **1** to avoid memory pressure (975/1024 MB was killing the actor at higher concurrency) |
+
+### Block Detection (discovered 2026-04-19)
+
+- **Hard block:** URL/title contains `datadome`/`captcha`/`blocked` AND DataDome cookie present → retire session, throw to re-queue
+- **Soft block:** No `__NEXT_DATA__`, body text < 50 chars, generic page title → silent DataDome block that serves an empty shell page. Detected after hydration timeout. Retire session + re-queue.
+- **Navigation:** Use `waitUntil: 'domcontentloaded'` instead of `'networkidle'` — networkidle causes 90s stalls on empty shell pages
+- **Hydration:** Wait up to 15s for Vue.js product selectors to appear. If timeout, allow 5s extra for DataDome JS challenge.
+
+---
+
+## TCGPlayer Site Architecture (discovered 2026-04-19)
+
+TCGPlayer is a **Vue.js SPA** (not Next.js). Key findings:
+
+- **No `__NEXT_DATA__`** — SSR state extraction is not viable
+- **Vue.js framework:** Uses Vuex store, Vue Router, module federation (discovery, seller micro-frontends)
+- **DOM structure:** Vue.js-rendered components with `data-v-*` attributes
+- **Key selectors:**
+  - `section.product-details__listings-total` — listings count + "As low as" price
+  - `div.marketPrice` — market price display
+  - `table.near-mint-table` — listing rows table
+  - `section.spotlight__seller` — seller spotlight section
+  - `.top-listing-price` — lowest listing price
+
+### TCGPlayer API Endpoints (discovered 2026-04-19)
+
+| Endpoint | Domain | Purpose | Response Structure |
+|---|---|---|---|
+| Listings | `mp-search-api.tcgplayer.com/v1/product/{id}/listings` | Seller listings (paginated, 10/page) | `{errors:[], results:[{totalResults, aggregations, results:[...items]}]}` |
+| Sales | `mpapi.tcgplayer.com/v2/product/{id}/latestsales` | Recent sales transactions | `{data:[{purchasePrice, shippingPrice, orderDate, condition, variant, quantity}], resultCount, totalResults}` |
+| Product Details | `mp-search-api.tcgplayer.com/v2/product/{id}/details` | Market/median price, metadata | `{marketPrice, medianPrice, ...}` |
+| Price History | `infinite-api.tcgplayer.com/price/history/{id}/detailed` | Historical price chart data | `{marketPrice, medianPrice, ...}` |
+
+### Listings API Behavior (discovered 2026-04-19)
+
+- The page fires **4 requests** to the listings endpoint during load
+- First 2-3 responses contain **only aggregations** (condition counts, seller keys) with no listing items
+- The **final response** contains the actual listing rows (10 per page) nested in `results[0].results`
+- Pagination is triggered by **scrolling** the listings container (infinite scroll)
+- Each scroll triggers a new API call with the next page of listings
+
+### Sales API Behavior (discovered 2026-04-19)
+
+- Returns **individual sale transactions** (not pre-aggregated buckets)
+- Fields: `purchasePrice`, `shippingPrice`, `orderDate`, `condition`, `variant`, `quantity`
+- Default response: 5 recent sales per call
+- The page fires the sales endpoint **twice** during load (same 5 records both times)
 
 ### Extraction Strategy (waterfall fallbacks per product URL)
 
-1. **API Interception** — Playwright intercepts XHR to `mpapi.tcgplayer.com` during page load; captures listings + sales history JSON in-flight
-2. **Request Replay** — Replays the intercepted API URL with session cookies; paginates for all listings and sales history window
-3. **SSR State Extraction** — Parses `<script id="__NEXT_DATA__">` from page HTML for product metadata
-4. **DOM Scraping** — Last resort; parses rendered HTML listing cards and sales table
+1. **API Interception** (primary) — Playwright intercepts XHR to `mp-search-api` and `mpapi` during page load; captures listings + sales + product details JSON in-flight. Listings and sales are accumulated and deduplicated across multiple responses.
+2. **Scroll Pagination** — If intercepted listings < `topListingsCount`, scroll the listings container to trigger infinite scroll; interception handler auto-accumulates new pages (max 5 scroll attempts).
+3. **DOM Scraping** (fallback) — Parses rendered HTML `table.near-mint-table` rows and Vue.js seller components if API interception yields zero data.
+4. ~~**SSR State Extraction**~~ — `__NEXT_DATA__` does not exist on TCGPlayer (Vue.js SPA). Kept as dead code for safety but never yields data.
 
 Each strategy's output is compared; the most complete dataset wins.
 
@@ -244,11 +292,18 @@ ACTOR START
 │   └─ Enqueue TCGPlayer URLs into RequestQueue (tcgplayer_id + tcgplayer_etched_id)
 │
 ├─ PHASE 2: Crawlee PlaywrightCrawler (stealth, Apify Residential Proxy US)
-│   ├─ maxConcurrency: 3
+│   ├─ maxConcurrency: 1 (capped to avoid memory pressure)
 │   ├─ Random jitter 1.5–3.5s between requests
-│   ├─ Per URL: API Interception → Request Replay → SSR Parse → DOM Scrape
-│   ├─ DataDome 403 detected → retire session, re-queue (max 3 retries)
-│   └─ Merge TCGPlayer data with Scryfall metadata payload
+│   ├─ Per URL:
+│   │   ├─ A. Navigate (domcontentloaded, 60s timeout)
+│   │   ├─ B. Hard DataDome block check → retire session + re-queue
+│   │   ├─ C. Wait for Vue.js hydration (15s timeout for product selectors)
+│   │   ├─ D. Soft block check (empty shell) → retire session + re-queue
+│   │   ├─ E. API Interception captures listings, sales, product details
+│   │   ├─ F. Scroll pagination if listings < topListingsCount (max 5 scrolls)
+│   │   ├─ G. DOM scraping fallback if interception yields zero data
+│   │   └─ H. Merge all data sources → build output record
+│   └─ ~48-55s per product (including hydration + scroll waits)
 │
 ├─ PHASE 3: Analytics (in-memory computation, no network)
 │   ├─ wall_depth_10pct  = listings.filter(l => l.price_landed <= min * 1.1).length

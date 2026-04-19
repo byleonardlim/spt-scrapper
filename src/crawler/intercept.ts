@@ -16,7 +16,7 @@ const safeJson = async (response: Response): Promise<unknown> => {
     }
 };
 
-const parseListingsResponse = (body: unknown): TcgListing[] => {
+export const parseListingsResponse = (body: unknown): TcgListing[] => {
     if (!body || typeof body !== 'object') return [];
     const b = body as Record<string, unknown>;
 
@@ -117,7 +117,7 @@ export const setupInterception = (
     page: Page,
     productId: number,
     salesWindowDays: number,
-): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; cleanup: () => Promise<void> } => {
+): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; getListingsApiUrl: () => string | null; collected: TcgInterceptedData; cleanup: () => Promise<void> } => {
     const collected: TcgInterceptedData = {
         listings: [],
         salesBuckets: [],
@@ -125,6 +125,7 @@ export const setupInterception = (
     };
     const observedApiUrls: string[] = [];
     let listingsSnippetLogged = false;
+    let listingsApiUrl: string | null = null;
 
     const handler = async (response: Response) => {
         const url = response.url();
@@ -137,6 +138,7 @@ export const setupInterception = (
             }
 
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
+                if (!listingsApiUrl) listingsApiUrl = url;
                 const body = await safeJson(response);
                 const listings = parseListingsResponse(body);
                 if (listings.length > 0) {
@@ -196,8 +198,14 @@ export const setupInterception = (
     page.on('response', handler);
 
     return {
-        getInterceptedData: () => ({ ...collected }),
+        getInterceptedData: () => ({
+            listings: [...collected.listings],
+            salesBuckets: [...collected.salesBuckets],
+            productDetails: collected.productDetails,
+        }),
         getObservedUrls: () => [...observedApiUrls],
+        getListingsApiUrl: () => listingsApiUrl,
+        collected,
         cleanup: async () => {
             page.off('response', handler);
         },

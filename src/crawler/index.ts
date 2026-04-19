@@ -133,7 +133,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, collected, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 // Phase A: Navigate with domcontentloaded (don't wait for networkidle)
@@ -173,6 +173,39 @@ export const runCrawler = async (
 
                 // Phase E: Small jitter before extraction
                 await sleep(randomJitter(500));
+
+                // Phase F: Scroll to load more listings if needed
+                const targetListings = input.topListingsCount;
+                const MAX_SCROLL_ATTEMPTS = 5;
+                if (collected.listings.length < targetListings) {
+                    log.info(`Product ${productId}: have ${collected.listings.length}/${targetListings} listings, scrolling for more...`);
+                    for (let attempt = 0; attempt < MAX_SCROLL_ATTEMPTS; attempt++) {
+                        const beforeCount = collected.listings.length;
+
+                        // Scroll the listing table/container into view and then scroll down
+                        await page.evaluate(() => {
+                            const container = document.querySelector('table.near-mint-table')
+                                ?? document.querySelector('section.product-details__listings-total')
+                                ?? document.querySelector('.marketplace');
+                            if (container) {
+                                container.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                            }
+                            window.scrollBy(0, 800);
+                        }).catch(() => {});
+
+                        // Wait for new API responses to arrive and be processed
+                        await sleep(2500);
+
+                        if (collected.listings.length >= targetListings) {
+                            log.info(`Product ${productId}: reached ${collected.listings.length} listings after ${attempt + 1} scroll(s)`);
+                            break;
+                        }
+                        if (collected.listings.length === beforeCount) {
+                            log.info(`Product ${productId}: no new listings after scroll ${attempt + 1}, stopping`);
+                            break;
+                        }
+                    }
+                }
 
                 const intercepted = getInterceptedData();
                 const ssr = await extractFromSsrState(page);
