@@ -202,11 +202,11 @@ export const runCrawler = async (
                             let apiResponse;
 
                             if (method === 'POST' && originalPostData) {
-                                // Modify the POST body to set offset/limit for pagination
+                                // Modify the POST body — TCGPlayer uses Elasticsearch from/size
                                 let postBody: Record<string, unknown> = {};
                                 try { postBody = JSON.parse(originalPostData); } catch { /* use empty */ }
-                                postBody.offset = offset;
-                                postBody.limit = PAGE_SIZE;
+                                postBody.from = offset;
+                                postBody.size = PAGE_SIZE;
 
                                 apiResponse = await page.context().request.post(listingsApiUrl, {
                                     headers: apiHeaders,
