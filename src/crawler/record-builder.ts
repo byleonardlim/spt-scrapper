@@ -94,7 +94,7 @@ export const buildRecord = (
         },
         inventory_snapshot: {
             timestamp: new Date().toISOString(),
-            total_active_listings: data.productDetails?.totalListings ?? data.listings.length,
+            total_active_listings: data.productDetails?.totalListings || data.listings.length,
             total_units_available: totalUnitsAvailable,
             top_listings: topListings,
         },

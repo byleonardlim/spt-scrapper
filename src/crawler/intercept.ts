@@ -109,7 +109,7 @@ const parseProductResponse = (body: unknown): TcgProductDetails | null => {
     return {
         marketPrice: r.marketPrice != null ? Number(r.marketPrice) : null,
         medianPrice: r.medianPrice != null ? Number(r.medianPrice) : null,
-        totalListings: parseInt(String(r.totalListings ?? r.total_listings ?? 0), 10),
+        totalListings: parseInt(String(r.totalListings ?? r.total_listings ?? r.listingsCount ?? 0), 10),
     };
 };
 
@@ -141,6 +141,19 @@ export const setupInterception = (
                 if (!listingsApiUrl) listingsApiUrl = url;
                 const body = await safeJson(response);
                 const listings = parseListingsResponse(body);
+
+                // Extract totalResults from listings API (the real total listing count)
+                if (body && typeof body === 'object') {
+                    const b = body as Record<string, unknown>;
+                    const r0 = Array.isArray(b.results) && b.results[0] ? b.results[0] as Record<string, unknown> : null;
+                    const total = Number(r0?.totalResults ?? r0?.totalListings ?? 0);
+                    if (total > 0 && collected.productDetails) {
+                        collected.productDetails.totalListings = total;
+                    } else if (total > 0 && !collected.productDetails) {
+                        collected.productDetails = { marketPrice: null, medianPrice: null, totalListings: total };
+                    }
+                }
+
                 if (listings.length > 0) {
                     // Accumulate listings across multiple API responses, dedup by listingId
                     const existingIds = new Set(collected.listings.map((l) => l.listingId));
