@@ -83,12 +83,13 @@ export const setupInterception = (
     page: Page,
     productId: number,
     salesWindowDays: number,
-): { getInterceptedData: () => TcgInterceptedData; cleanup: () => Promise<void> } => {
+): { getInterceptedData: () => TcgInterceptedData; getObservedUrls: () => string[]; cleanup: () => Promise<void> } => {
     const collected: TcgInterceptedData = {
         listings: [],
         salesBuckets: [],
         productDetails: null,
     };
+    const observedApiUrls: string[] = [];
 
     const handler = async (response: Response) => {
         const url = response.url();
@@ -96,6 +97,10 @@ export const setupInterception = (
         if (status < 200 || status >= 300) return;
 
         try {
+            if (/mpapi\.tcgplayer\.com|api\.tcgplayer\.com/i.test(url)) {
+                observedApiUrls.push(`[${status}] ${url.slice(0, 200)}`);
+            }
+
             if (LISTINGS_PATTERN.test(url) && url.includes(String(productId))) {
                 const body = await safeJson(response);
                 const listings = parseListingsResponse(body);
@@ -127,6 +132,7 @@ export const setupInterception = (
 
     return {
         getInterceptedData: () => ({ ...collected }),
+        getObservedUrls: () => [...observedApiUrls],
         cleanup: async () => {
             page.off('response', handler);
         },

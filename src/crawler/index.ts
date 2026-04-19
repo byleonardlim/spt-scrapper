@@ -1,5 +1,5 @@
 import { Actor, log } from 'apify';
-import { PlaywrightCrawler, RequestQueue } from 'crawlee';
+import { PlaywrightCrawler, RequestQueue, KeyValueStore } from 'crawlee';
 import { chromium } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { ActorInput, ScrapedRecord, ScryfallSeedCard } from '../types.js';
@@ -89,7 +89,7 @@ export const runCrawler = async (
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
             });
 
-            const { getInterceptedData, cleanup } = setupInterception(page, productId, input.salesWindowDays);
+            const { getInterceptedData, getObservedUrls, cleanup } = setupInterception(page, productId, input.salesWindowDays);
 
             try {
                 await page.goto(request.url, { waitUntil: 'networkidle', timeout: 90_000 });
@@ -101,6 +101,40 @@ export const runCrawler = async (
                 }
 
                 await sleep(randomJitter(500));
+
+                // --- Diagnostic: final URL & observed API calls ---
+                const finalUrl = page.url();
+                const observedUrls = getObservedUrls();
+                log.info(`Product ${productId} diagnostics`, {
+                    finalUrl,
+                    apiCallsObserved: observedUrls.length,
+                    apiUrls: observedUrls.slice(0, 10),
+                });
+
+                // --- Diagnostic: __NEXT_DATA__ shape ---
+                const ssrDiag = await page.evaluate(() => {
+                    const el = document.getElementById('__NEXT_DATA__');
+                    if (!el?.textContent) return { exists: false, keys: [], snippet: '' };
+                    try {
+                        const parsed = JSON.parse(el.textContent);
+                        const ppKeys = Object.keys(parsed?.props?.pageProps ?? {});
+                        return {
+                            exists: true,
+                            keys: ppKeys.slice(0, 20),
+                            snippet: el.textContent.slice(0, 500),
+                        };
+                    } catch {
+                        return { exists: true, keys: [], snippet: el.textContent.slice(0, 300) };
+                    }
+                }).catch(() => ({ exists: false, keys: [], snippet: '' }));
+                log.info(`Product ${productId} __NEXT_DATA__`, ssrDiag);
+
+                // --- Diagnostic: page title + visible text snippet ---
+                const pageTitle = await page.title().catch(() => '');
+                const bodySnippet = await page.evaluate(() => {
+                    return document.body?.innerText?.slice(0, 500) ?? '';
+                }).catch(() => '');
+                log.info(`Product ${productId} page content`, { pageTitle, bodySnippet: bodySnippet.slice(0, 300) });
 
                 const intercepted = getInterceptedData();
                 const ssr = await extractFromSsrState(page);
@@ -120,6 +154,22 @@ export const runCrawler = async (
                     buckets: merged.salesBuckets.length,
                     hasProductDetails: Boolean(merged.productDetails),
                 });
+
+                // --- Diagnostic: screenshot + soft-block detection on zero data ---
+                if (merged.listings.length === 0 && merged.salesBuckets.length === 0 && !merged.productDetails) {
+                    log.warning(`Product ${productId} ZERO DATA — saving diagnostic screenshot`);
+                    try {
+                        const screenshotBuffer = await page.screenshot({ fullPage: false });
+                        const kvStore = await KeyValueStore.open();
+                        await kvStore.setValue(
+                            `diag-${productId}`,
+                            screenshotBuffer,
+                            { contentType: 'image/png' },
+                        );
+                    } catch (e) {
+                        log.warning(`Failed to save screenshot for ${productId}`, { error: String(e) });
+                    }
+                }
 
                 const record = buildRecord(seed, merged, input);
                 results.push(record);
