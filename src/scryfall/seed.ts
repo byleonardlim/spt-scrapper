@@ -1,7 +1,7 @@
 import { log } from 'apify';
 import { gotScraping } from 'got-scraping';
-import type { ActorInput, ScryfallCardRaw, ScryfallSeedCard } from '../types.js';
-import { deriveVariantAttributes, buildVariantLabel, resolveFinishFromScryfall } from '../utils/variant.js';
+import type { ActorInput, ScryfallCardRaw, ScryfallSeedCard, CardFinish } from '../types.js';
+import { deriveVariantAttributes, buildVariantLabel } from '../utils/variant.js';
 
 const SCRYFALL_API = 'https://api.scryfall.com';
 const RATE_LIMIT_MS = 100;
@@ -52,41 +52,53 @@ const fetchSetCards = async (setCode: string, limit: number): Promise<ScryfallCa
     return collected;
 };
 
-const cardToSeedEntry = (card: ScryfallCardRaw): ScryfallSeedCard | null => {
-    if (!card.tcgplayer_id) return null;
+const FINISHES_TO_SEED: CardFinish[] = ['nonfoil', 'foil', 'glossy', 'textured'];
 
-    const finish = resolveFinishFromScryfall(card.finishes);
-    const variantAttributes = deriveVariantAttributes({
-        finish,
-        language: card.lang,
-        scryfallFinishes: card.finishes ?? null,
-        scryfallPromoTypes: card.promo_types ?? null,
-        scryfallFrameEffects: card.frame_effects ?? null,
-        scryfallSecurityStamp: card.security_stamp ?? null,
-    });
-    const variantLabel = buildVariantLabel({
-        finish,
-        language: card.lang,
-        scryfallFinishes: card.finishes ?? null,
-        scryfallPromoTypes: card.promo_types ?? null,
-        scryfallFrameEffects: card.frame_effects ?? null,
-        scryfallSecurityStamp: card.security_stamp ?? null,
-    });
+const cardToSeedEntries = (card: ScryfallCardRaw): ScryfallSeedCard[] => {
+    if (!card.tcgplayer_id) return [];
 
-    return {
-        scryfallId: card.id,
-        sptId: `${card.set}-${card.collector_number}`,
-        name: card.name,
-        setCode: card.set,
-        setName: card.set_name,
-        collectorNumber: card.collector_number,
-        rarity: card.rarity,
-        language: card.lang,
-        finish,
-        variantAttributes,
-        variantLabel,
-        tcgplayerProductId: card.tcgplayer_id,
-    };
+    const entries: ScryfallSeedCard[] = [];
+    const scryfallFinishes = card.finishes ?? [];
+
+    // Generate a seed for each finish type that exists on this card (excluding etched)
+    for (const finish of FINISHES_TO_SEED) {
+        // Skip if this finish isn't in Scryfall's finishes array
+        if (!scryfallFinishes.includes(finish)) continue;
+
+        const variantAttributes = deriveVariantAttributes({
+            finish,
+            language: card.lang,
+            scryfallFinishes: card.finishes ?? null,
+            scryfallPromoTypes: card.promo_types ?? null,
+            scryfallFrameEffects: card.frame_effects ?? null,
+            scryfallSecurityStamp: card.security_stamp ?? null,
+        });
+        const variantLabel = buildVariantLabel({
+            finish,
+            language: card.lang,
+            scryfallFinishes: card.finishes ?? null,
+            scryfallPromoTypes: card.promo_types ?? null,
+            scryfallFrameEffects: card.frame_effects ?? null,
+            scryfallSecurityStamp: card.security_stamp ?? null,
+        });
+
+        entries.push({
+            scryfallId: card.id,
+            sptId: `${card.set}-${card.collector_number}`,
+            name: card.name,
+            setCode: card.set,
+            setName: card.set_name,
+            collectorNumber: card.collector_number,
+            rarity: card.rarity,
+            language: card.lang,
+            finish,
+            variantAttributes,
+            variantLabel,
+            tcgplayerProductId: card.tcgplayer_id,
+        });
+    }
+
+    return entries;
 };
 
 const etchedCardToSeedEntry = (card: ScryfallCardRaw): ScryfallSeedCard | null => {
@@ -134,8 +146,8 @@ export const seedScryfall = async (input: ActorInput): Promise<ScryfallSeedCard[
         log.info(`Set ${setCode}: ${cards.length} prints found`);
 
         for (const card of cards) {
-            const seed = cardToSeedEntry(card);
-            if (seed) allSeeds.push(seed);
+            const seeds = cardToSeedEntries(card);
+            allSeeds.push(...seeds);
 
             const etchedSeed = etchedCardToSeedEntry(card);
             if (etchedSeed) allSeeds.push(etchedSeed);
