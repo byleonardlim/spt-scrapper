@@ -185,9 +185,12 @@ export const runCrawler = async (
 
                     const baseUrl = new URL(listingsApiUrl);
                     const apiHeaders = getListingsApiHeaders();
-                    // Remove headers that shouldn't be forwarded
-                    delete apiHeaders['host'];
-                    delete apiHeaders['content-length'];
+                    // Remove HTTP/2 pseudo-headers and headers that shouldn't be forwarded
+                    for (const key of Object.keys(apiHeaders)) {
+                        if (key.startsWith(':') || key === 'host' || key === 'content-length') {
+                            delete apiHeaders[key];
+                        }
+                    }
 
                     for (let pageNum = 1; pageNum <= MAX_PAGES; pageNum++) {
                         const beforeCount = collected.listings.length;
